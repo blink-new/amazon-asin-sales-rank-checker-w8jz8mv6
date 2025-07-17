@@ -15,6 +15,7 @@ interface SalesRankData {
   availability?: string
   lowestBuyboxPrice30Days?: number
   lowestBuyboxPriceDate?: string
+  priceSource?: string
   lastUpdated?: string
 }
 
@@ -74,46 +75,80 @@ function App() {
         const product = data.products[0]
         
         // Extract sales rank data (Keepa stores historical data in arrays)
-        const salesRankHistory = product.csv?.[3] // Sales rank is typically in csv[3]
+        // csv[3] = Sales rank in main category, csv[4] = Sales rank in subcategory
+        const salesRankHistories = [product.csv?.[3], product.csv?.[4]] // Try main category first, then subcategory
         let currentSalesRank = null
         
-        if (salesRankHistory && salesRankHistory.length > 0) {
-          // Get the most recent sales rank (last non-null value)
-          for (let i = salesRankHistory.length - 1; i >= 0; i -= 2) {
-            if (salesRankHistory[i] !== -1 && salesRankHistory[i] != null) {
-              currentSalesRank = salesRankHistory[i]
-              break
+        for (const salesRankHistory of salesRankHistories) {
+          if (salesRankHistory && salesRankHistory.length > 0) {
+            // Get the most recent sales rank (last non-null value)
+            // Data is stored as [timestamp, value, timestamp, value, ...]
+            for (let i = salesRankHistory.length - 1; i >= 1; i -= 2) {
+              const rank = salesRankHistory[i]
+              if (rank !== -1 && rank != null && rank > 0) {
+                currentSalesRank = rank
+                break
+              }
+            }
+            if (currentSalesRank) break // Use first available rank
+          }
+        }
+
+        // Extract price history - try multiple price types
+        // csv[1] = Amazon price, csv[2] = New price, csv[3] = Used price, csv[18] = Buy Box price
+        const priceHistories = [
+          { data: product.csv?.[1], type: 'Amazon' },      // Amazon price
+          { data: product.csv?.[18], type: 'Buy Box' },    // Buy Box price  
+          { data: product.csv?.[2], type: 'New' },         // New price
+        ]
+        
+        let lowestBuyboxPrice30Days = null
+        let lowestBuyboxPriceDate = null
+        let priceSource = null
+        
+        for (const priceHistory of priceHistories) {
+          if (priceHistory.data && priceHistory.data.length > 0) {
+            let lowestPrice = Infinity
+            let lowestPriceTimestamp = null
+            
+            // Iterate through price history (timestamp, price pairs)
+            for (let i = 0; i < priceHistory.data.length; i += 2) {
+              const timestamp = priceHistory.data[i]
+              const price = priceHistory.data[i + 1]
+              
+              // Skip invalid prices (-1 means no data, null/undefined)
+              if (price !== -1 && price != null && price > 0) {
+                if (price < lowestPrice) {
+                  lowestPrice = price
+                  lowestPriceTimestamp = timestamp
+                }
+              }
+            }
+            
+            if (lowestPrice !== Infinity) {
+              lowestBuyboxPrice30Days = lowestPrice / 100 // Convert from cents to dollars
+              priceSource = priceHistory.type
+              // Convert Keepa timestamp to readable date
+              // Keepa time is in minutes since epoch (Jan 1, 2011, 00:00 UTC)
+              // Keepa epoch starts at Jan 1, 2011, so we add that offset
+              const keepaEpochStart = new Date('2011-01-01T00:00:00.000Z').getTime()
+              lowestBuyboxPriceDate = new Date(keepaEpochStart + (lowestPriceTimestamp * 60000)).toLocaleDateString()
+              break // Use the first available price type
             }
           }
         }
 
-        // Extract buybox price history (csv[18] is typically buybox price)
-        const buyboxPriceHistory = product.csv?.[18] // Buybox price history
-        let lowestBuyboxPrice30Days = null
-        let lowestBuyboxPriceDate = null
+        // Get current price from the most recent data point
+        let currentPrice = null
+        const currentPriceHistories = [product.csv?.[1], product.csv?.[18], product.csv?.[2]] // Amazon, Buy Box, New
         
-        if (buyboxPriceHistory && buyboxPriceHistory.length > 0) {
-          let lowestPrice = Infinity
-          let lowestPriceTimestamp = null
-          
-          // Iterate through price history (timestamp, price pairs)
-          for (let i = 0; i < buyboxPriceHistory.length; i += 2) {
-            const timestamp = buyboxPriceHistory[i]
-            const price = buyboxPriceHistory[i + 1]
-            
-            // Skip invalid prices (-1 means no data)
-            if (price !== -1 && price != null && price > 0) {
-              if (price < lowestPrice) {
-                lowestPrice = price
-                lowestPriceTimestamp = timestamp
-              }
+        for (const priceData of currentPriceHistories) {
+          if (priceData && priceData.length >= 2) {
+            const lastPrice = priceData[priceData.length - 1]
+            if (lastPrice !== -1 && lastPrice != null && lastPrice > 0) {
+              currentPrice = lastPrice / 100
+              break
             }
-          }
-          
-          if (lowestPrice !== Infinity) {
-            lowestBuyboxPrice30Days = lowestPrice / 100 // Convert from cents to dollars
-            // Convert Keepa timestamp to readable date
-            lowestBuyboxPriceDate = new Date((lowestPriceTimestamp + 21564000) * 60000).toLocaleDateString()
           }
         }
 
@@ -122,10 +157,11 @@ function App() {
           title: product.title || 'Product Title Not Available',
           salesRank: currentSalesRank,
           category: product.categoryTree?.[0]?.name || 'Category Not Available',
-          price: product.csv?.[0] ? product.csv[0][product.csv[0].length - 1] / 100 : undefined,
-          availability: product.csv?.[2] ? 'In Stock' : 'Availability Unknown',
+          price: currentPrice,
+          availability: product.availabilityAmazon >= 0 ? 'In Stock' : 'Availability Unknown',
           lowestBuyboxPrice30Days,
           lowestBuyboxPriceDate,
+          priceSource,
           lastUpdated: new Date().toLocaleString()
         })
       } else {
@@ -300,7 +336,12 @@ function App() {
                     <p className="text-lg font-semibold text-blue-700">
                       {result.lowestBuyboxPrice30Days ? `${result.lowestBuyboxPrice30Days.toFixed(2)}` : 'N/A'}
                     </p>
-                    {result.lowestBuyboxPriceDate && (
+                    {result.lowestBuyboxPriceDate && result.priceSource && (
+                      <p className="text-xs text-blue-600 mt-1">
+                        {result.priceSource} price on {result.lowestBuyboxPriceDate}
+                      </p>
+                    )}
+                    {result.lowestBuyboxPriceDate && !result.priceSource && (
                       <p className="text-xs text-blue-600 mt-1">
                         on {result.lowestBuyboxPriceDate}
                       </p>
