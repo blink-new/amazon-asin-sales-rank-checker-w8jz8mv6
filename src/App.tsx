@@ -116,8 +116,9 @@ function App() {
               const timestamp = priceHistory.data[i]
               const price = priceHistory.data[i + 1]
               
-              // Skip invalid prices (-1 means no data, null/undefined)
-              if (price !== -1 && price != null && price > 0) {
+              // Only consider prices from the last 30 days
+              // Compare with the thirtyDaysAgo timestamp we calculated earlier
+              if (timestamp >= thirtyDaysAgo && price !== -1 && price != null && price > 0) {
                 if (price < lowestPrice) {
                   lowestPrice = price
                   lowestPriceTimestamp = timestamp
