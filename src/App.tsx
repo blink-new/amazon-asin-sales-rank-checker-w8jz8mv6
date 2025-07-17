@@ -62,7 +62,9 @@ function App() {
 
     try {
       // Keepa API endpoint for product data with history parameter for last 30 days
-      const thirtyDaysAgo = Math.floor((Date.now() - (30 * 24 * 60 * 60 * 1000)) / 60000) // Keepa time format (minutes since epoch)
+      // Keepa time is in minutes since their epoch (Jan 1, 2011, 00:00 UTC)
+      const keepaEpochStart = new Date('2011-01-01T00:00:00.000Z').getTime()
+      const thirtyDaysAgo = Math.floor((Date.now() - (30 * 24 * 60 * 60 * 1000) - keepaEpochStart) / 60000)
       const response = await fetch(`https://api.keepa.com/product?key=${apiKey}&domain=1&asin=${formattedASIN}&history=1&since=${thirtyDaysAgo}`)
       
       if (!response.ok) {
@@ -106,19 +108,31 @@ function App() {
         let lowestBuyboxPriceDate = null
         let priceSource = null
         
+        // Debug: log available price data
+        console.log('Available price data:', {
+          amazon: product.csv?.[1]?.length || 0,
+          buybox: product.csv?.[18]?.length || 0,
+          new: product.csv?.[2]?.length || 0,
+          thirtyDaysAgo
+        })
+        
         for (const priceHistory of priceHistories) {
           if (priceHistory.data && priceHistory.data.length > 0) {
             let lowestPrice = Infinity
             let lowestPriceTimestamp = null
+            let validPricesFound = 0
             
             // Iterate through price history (timestamp, price pairs)
             for (let i = 0; i < priceHistory.data.length; i += 2) {
               const timestamp = priceHistory.data[i]
               const price = priceHistory.data[i + 1]
               
-              // Only consider prices from the last 30 days
-              // Compare with the thirtyDaysAgo timestamp we calculated earlier
-              if (timestamp >= thirtyDaysAgo && price !== -1 && price != null && price > 0) {
+              // Check if price is valid (not -1 and greater than 0)
+              if (price !== -1 && price != null && price > 0) {
+                validPricesFound++
+                
+                // For now, let's consider ALL valid prices, not just last 30 days
+                // This will help us debug if the timestamp filtering is the issue
                 if (price < lowestPrice) {
                   lowestPrice = price
                   lowestPriceTimestamp = timestamp
@@ -126,12 +140,16 @@ function App() {
               }
             }
             
+            console.log(`${priceHistory.type} price history:`, {
+              totalDataPoints: priceHistory.data.length / 2,
+              validPricesFound,
+              lowestPrice: lowestPrice === Infinity ? null : lowestPrice / 100
+            })
+            
             if (lowestPrice !== Infinity) {
               lowestBuyboxPrice30Days = lowestPrice / 100 // Convert from cents to dollars
               priceSource = priceHistory.type
               // Convert Keepa timestamp to readable date
-              // Keepa time is in minutes since epoch (Jan 1, 2011, 00:00 UTC)
-              // Keepa epoch starts at Jan 1, 2011, so we add that offset
               const keepaEpochStart = new Date('2011-01-01T00:00:00.000Z').getTime()
               lowestBuyboxPriceDate = new Date(keepaEpochStart + (lowestPriceTimestamp * 60000)).toLocaleDateString()
               break // Use the first available price type
