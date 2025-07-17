@@ -13,6 +13,8 @@ interface SalesRankData {
   category?: string
   price?: number
   availability?: string
+  lowestBuyboxPrice30Days?: number
+  lowestBuyboxPriceDate?: string
   lastUpdated?: string
 }
 
@@ -58,8 +60,9 @@ function App() {
     setLoading(true)
 
     try {
-      // Keepa API endpoint for product data
-      const response = await fetch(`https://api.keepa.com/product?key=${apiKey}&domain=1&asin=${formattedASIN}`)
+      // Keepa API endpoint for product data with history parameter for last 30 days
+      const thirtyDaysAgo = Math.floor((Date.now() - (30 * 24 * 60 * 60 * 1000)) / 60000) // Keepa time format (minutes since epoch)
+      const response = await fetch(`https://api.keepa.com/product?key=${apiKey}&domain=1&asin=${formattedASIN}&history=1&since=${thirtyDaysAgo}`)
       
       if (!response.ok) {
         throw new Error(`API Error: ${response.status}`)
@@ -84,6 +87,36 @@ function App() {
           }
         }
 
+        // Extract buybox price history (csv[18] is typically buybox price)
+        const buyboxPriceHistory = product.csv?.[18] // Buybox price history
+        let lowestBuyboxPrice30Days = null
+        let lowestBuyboxPriceDate = null
+        
+        if (buyboxPriceHistory && buyboxPriceHistory.length > 0) {
+          let lowestPrice = Infinity
+          let lowestPriceTimestamp = null
+          
+          // Iterate through price history (timestamp, price pairs)
+          for (let i = 0; i < buyboxPriceHistory.length; i += 2) {
+            const timestamp = buyboxPriceHistory[i]
+            const price = buyboxPriceHistory[i + 1]
+            
+            // Skip invalid prices (-1 means no data)
+            if (price !== -1 && price != null && price > 0) {
+              if (price < lowestPrice) {
+                lowestPrice = price
+                lowestPriceTimestamp = timestamp
+              }
+            }
+          }
+          
+          if (lowestPrice !== Infinity) {
+            lowestBuyboxPrice30Days = lowestPrice / 100 // Convert from cents to dollars
+            // Convert Keepa timestamp to readable date
+            lowestBuyboxPriceDate = new Date((lowestPriceTimestamp + 21564000) * 60000).toLocaleDateString()
+          }
+        }
+
         setResult({
           asin: formattedASIN,
           title: product.title || 'Product Title Not Available',
@@ -91,6 +124,8 @@ function App() {
           category: product.categoryTree?.[0]?.name || 'Category Not Available',
           price: product.csv?.[0] ? product.csv[0][product.csv[0].length - 1] / 100 : undefined,
           availability: product.csv?.[2] ? 'In Stock' : 'Availability Unknown',
+          lowestBuyboxPrice30Days,
+          lowestBuyboxPriceDate,
           lastUpdated: new Date().toLocaleString()
         })
       } else {
@@ -130,7 +165,7 @@ function App() {
               Product Lookup
             </CardTitle>
             <CardDescription>
-              Enter an Amazon ASIN and your Keepa API key to retrieve sales rank information
+              Enter an Amazon ASIN and your Keepa API key to retrieve sales rank and pricing information
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -206,7 +241,7 @@ function App() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <TrendingUp className="h-5 w-5" />
-                Sales Rank Results
+                Sales Rank & Pricing Results
               </CardTitle>
               <CardDescription>
                 Data retrieved for ASIN: <span className="font-mono font-medium">{result.asin}</span>
@@ -220,7 +255,7 @@ function App() {
               </div>
 
               {/* Key Metrics */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
                   <div className="flex items-center justify-between">
                     <div>
@@ -248,14 +283,28 @@ function App() {
                 <div className="p-4 bg-green-50 rounded-lg border border-green-200">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm font-medium text-gray-600">Price</p>
+                      <p className="text-sm font-medium text-gray-600">Current Price</p>
                       <p className="text-lg font-semibold text-green-700">
-                        {result.price ? `$${result.price.toFixed(2)}` : 'N/A'}
+                        {result.price ? `${result.price.toFixed(2)}` : 'N/A'}
                       </p>
                     </div>
                     <Badge variant="secondary" className="bg-green-100 text-green-800">
                       {result.availability}
                     </Badge>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <div>
+                    <p className="text-sm font-medium text-gray-600">Lowest Price (30 days)</p>
+                    <p className="text-lg font-semibold text-blue-700">
+                      {result.lowestBuyboxPrice30Days ? `${result.lowestBuyboxPrice30Days.toFixed(2)}` : 'N/A'}
+                    </p>
+                    {result.lowestBuyboxPriceDate && (
+                      <p className="text-xs text-blue-600 mt-1">
+                        on {result.lowestBuyboxPriceDate}
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -284,6 +333,7 @@ function App() {
                   <li>• Get a free Keepa API key from <a href="https://keepa.com/#!api" target="_blank" rel="noopener noreferrer" className="underline">keepa.com</a></li>
                   <li>• Enter both values above and click "Check Sales Rank"</li>
                   <li>• Sales rank indicates how well a product sells compared to others in its category</li>
+                  <li>• The tool also shows the lowest buybox price from the last 30 days for price tracking</li>
                 </ul>
               </div>
             </div>
